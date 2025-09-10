@@ -1,0 +1,233 @@
+---
+- name: Run commands on Cisco switches and save output in JSON file
+  hosts: all
+  gather_facts: no
+  connection: network_cli
+  collections:
+    - cisco.ios.ios_command
+
+  tasks:
+
+    - name: Fetch VTY configuration output
+      cisco.ios.ios_command:
+        commands:
+          - show running-config | section line vty
+          - show line
+      register: vty_output
+
+    - name: Check SNMP user and group information
+      cisco.ios.ios_command:
+        commands:
+          - show snmp user
+          - show snmp group
+      register: snmp_output
+
+    - name: Extract SNMP user and group via regex
+      ansible.builtin.debug:
+        msg:
+          - "{{ snmp_output.stdout[0] | regex_search('User name:\\s*(\\S+)') }}"
+          - "{{ snmp_output.stdout[0] | regex_search('groupname:\\s*(\\S+)') }}"
+
+    - name: Validate DHCP relay configuration
+      cisco.ios.ios_command:
+        commands:
+          - show running-config | section dhcp
+      register: dhcp_output
+
+    - name: Extract DHCP snooping VLANs via regex
+      ansible.builtin.debug:
+        msg:
+          - "{{ dhcp_output.stdout[0] | regex_search('ip dhcp snooping vlan\\s+([\\d,-]+)') }}"
+
+    - name: Validate ISE configuration
+      cisco.ios.ios_command:
+        commands:
+          - show running-config | section tacacs
+          - show tacacs
+      register: ise_output
+
+    - name: Validate AAA configuration
+      cisco.ios.ios_command:
+        commands:
+          - show running-config | section aaa
+      register: aaa_output
+
+    - name: Validate VLAN list and names
+      cisco.ios.ios_command:
+        commands:
+          - show vlan brief
+      register: vlan_output
+
+    - name: Extract VLAN info via regex
+      ansible.builtin.debug:
+        msg:
+          - "{{ vlan_output.stdout[0] | regex_search('^(\\d+)\\s+([^\\s]+(?:\\s[^\\s]+)*)') }}"
+
+    - name: Identify non-standard dot1x configuration
+      cisco.ios.ios_command:
+        commands:
+          - show dot1x all
+      register: dot1x_output
+
+    - name: Check logging server configuration
+      cisco.ios.ios_command:
+        commands:
+          - show running-config | section logging
+          - show logging
+      register: logging_output
+
+    - name: Extract logging IP via regex
+      ansible.builtin.debug:
+        msg:
+          - "{{ logging_output.stdout[0] | regex_search('Logging to (\\d{1,3}(?:\\.\\d{1,3}){3})') }}"
+
+    - name: Extract logging type via regex
+      ansible.builtin.debug:
+        msg:
+          - "{{ logging_output.stdout[0] | regex_search('(\\w+ logging):.*?(disabled|enabled)') }}"
+
+    - name: Validate uplink port-channel configuration
+      cisco.ios.ios_command:
+        commands:
+          - show running-config | section interface Port-channel
+          - show etherchannel summary
+          - show interfaces status
+      register: portchannel_output
+
+    - name: Confirm MTU settings on uplink interfaces
+      cisco.ios.ios_command:
+        commands:
+          - show interfaces | include MTU
+      register: mtu_output
+
+    - name: Extract MTU value via regex
+      ansible.builtin.debug:
+        msg:
+          - "{{ mtu_output.stdout[0] | regex_search('MTU\\s+(\\d+)\\s+bytes') }}"
+
+    - name: Validate system MTU settings
+      cisco.ios.ios_command:
+        commands:
+          - show system mtu
+      register: system_mtu_output
+
+    - name: Verify source-interface mappings
+      cisco.ios.ios_command:
+        commands:
+          - show running-config | section source-interface
+      register: mgmt_ip_output
+
+    - name: Extract source-interface lines via regex
+      ansible.builtin.debug:
+        msg:
+          - "{{ mgmt_ip_output.stdout[0] | regex_search('^(ip (tftp|tacacs|ssh|logging|snmp) source-interface Vlan\\d+|logging source-interface Vlan\\d+|snmp-server trap-source Vlan\\d+)$') }}"
+
+    - name: Verify VTY access-list
+      cisco.ios.ios_command:
+        commands:
+          - show running-config | include access-list VTYACCESS
+      register: vty_acl_output
+
+    - name: Verify SNMP access-list
+      cisco.ios.ios_command:
+        commands:
+          - show running-config | include access-list SNMP-RO
+      register: snmp_acl_output
+
+    - name: Verify login banner
+      cisco.ios.ios_command:
+        commands:
+          - show running-config
+      register: banner_output
+
+    - name: Extract login banner via regex
+      ansible.builtin.debug:
+        msg:
+          - "{{ banner_output.stdout[0] | regex_search('banner login \\^C([\\s\\S]*?)\\^C') }}"
+
+    - name: Verify NTP server
+      cisco.ios.ios_command:
+        commands:
+          - show running-config | include ntp
+      register: ntp_output
+
+    - name: Verify uplink interface configuration
+      cisco.ios.ios_command:
+        commands:
+          - show running-config | section interface
+      register: uplink_interface_output
+
+    - name: Extract uplink interface block via regex
+      ansible.builtin.debug:
+        msg:
+          - "{{ uplink_interface_output.stdout[0] | regex_search('^interface\\s+\\S+[\\s\\S]*?description\\s+ALM-S[23][\\s\\S]*?(?=^interface\\s+\\S+|\\z)') }}"
+
+    - name: Verify version
+      cisco.ios.ios_command:
+        commands:
+          - show version
+      register: version_output
+
+    - name: Verify license
+      cisco.ios.ios_command:
+        commands:
+          - show license summary
+      register: license_output
+
+    - name: Verify routes
+      cisco.ios.ios_command:
+        commands:
+          - show ip route
+      register: route_output
+
+    - name: Verify clock
+      cisco.ios.ios_command:
+        commands:
+          - show clock detail
+      register: clock_output
+
+    - name: Ensure output directory exists (control node)
+      ansible.builtin.file:
+        path: "./outputs"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      run_once: true
+
+    - name: Aggregate collected command outputs (raw registers)
+      set_fact:
+        collected_outputs: >-
+          {{
+            {
+              'hostname': hostname_output | default(''),
+              'data': {
+                'vty': vty_output | default({}),
+                'vty_ACL': vty_acl_output | default({}),
+                'snmp': snmp_output | default({}),
+                'snmp_ACL': snmp_acl_output | default({}),
+                'dhcp': dhcp_output | default({}),
+                'ise': ise_output | default({}),
+                'aaa': aaa_output | default({}),
+                'vlan': vlan_output | default({}),
+                'dot1x': dot1x_output | default({}),
+                'logging': logging_output | default({}),
+                'portchannel': portchannel_output | default({}),
+                'mtu': mtu_output | default({}),
+                'system_mtu': system_mtu_output | default({}),
+                'mgmt_ip': mgmt_ip_output | default({}),
+                'Banner': banner_output | default({}),
+                'ntp': ntp_output | default({}),
+                'Uplink_if': uplink_interface_output | default({}),
+                'version': version_output | default({}),
+                'License': license_output | default({}),
+                'route': route_output | default({}),
+                'clock': clock_output | default({})
+              }
+            }
+          }}
+
+    - name: Save aggregated JSON per device (control node)
+      ansible.builtin.copy:
+        content: "{{ collected_outputs | to_nice_json }}"
+        dest: "./outputs/{{ inventory_hostname }}.json"
+      delegate_to: localhost
